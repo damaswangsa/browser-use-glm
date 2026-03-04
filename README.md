@@ -11,9 +11,9 @@ Run [browser-use](https://github.com/browser-use/browser-use) with GLM models (v
 - Controls a real Chromium browser using AI (GLM-4.6)
 - Works on ARM64 VPS (Oracle Cloud Free Tier, etc)
 - Keeps browser sessions persistent (saved logins carry over)
-- Exposes browser automation as an OpenClaw skill — controllable via your openclaw channel (Whatsapp, Telegram, Discord, etc)
+- Exposes browser automation as an OpenClaw skill — controllable via Telegram, WhatsApp, Discord, etc
 
-**Example:** Tell OpenClaw on Telegram _"Post to Threads: Hello from AI! 🤖"_ and it posts automatically — no manual login required.
+**Example:** Tell OpenClaw on Telegram *"Post to Threads: Hello from AI! 🤖"* and it posts automatically — no manual login required.
 
 ---
 
@@ -69,49 +69,63 @@ sed -i 's/message_dict\["content"\] = message_dict\["content"\] or None/message_
 **Patch 2: Add GLM XML response parser to browser-use**
 
 ```bash
-# Add 'import re' after existing imports
 sed -i '3a import re' \
   ~/browser-agent/lib/python3.12/site-packages/browser_use/agent/message_manager/utils.py
 ```
 
-Then run this Python script to inject the GLM parser:
+Then inject the GLM parser:
 
 ```bash
-python3 << 'EOF'
+python3 << 'PATCH'
 filepath = '/home/ubuntu/browser-agent/lib/python3.12/site-packages/browser_use/agent/message_manager/utils.py'
+
+glm_block = """        # Handle GLM <tool_call> XML format
+        if '<tool_call>' in content:
+            m = re.search(r'\\{[\\s\\S]+?"current_state"[\\s\\S]+?"action"[\\s\\S]+?\\}', content)
+            if m:
+                try: return json.loads(m.group(0))
+                except: pass
+            cs, ac = {}, []
+            cm = re.search(r'"evaluation_previous_goal".*?"next_goal"\\s*:\\s*"[^"]+"', content, re.DOTALL)
+            if cm:
+                try: cs = json.loads('{' + cm.group(0) + '}')
+                except: pass
+            am = re.search(r'"action"\\s*[":]+\\s*(\\[[^\\]]*\\])', content, re.DOTALL)
+            if am:
+                try: ac = json.loads(am.group(1))
+                except: pass
+            if cs:
+                return {'current_state': cs, 'action': ac}
+            raise ValueError('Could not parse GLM tool_call')
+"""
 
 with open(filepath, 'r') as f:
     content = f.read()
 
-old = "\t\t# Handle GLM <tool_call> XML format\n\t\tif '<tool_call>' in content:\n\t\t\tcurrent_state = {}\n\t\t\taction = []\n\t\t\tfor key_match in re.finditer(r'<arg_key>(.*?)</arg_key>\\s*<arg_value>(.*?)</arg_value>', content, re.DOTALL):\n\t\t\t\tk, v = key_match.group(1).strip(), key_match.group(2).strip()\n\t\t\t\tif k == 'current_state':\n\t\t\t\t\tcurrent_state = json.loads(v)\n\t\t\t\telif k == 'action':\n\t\t\t\t\taction = json.loads(v)\n\t\t\treturn {'current_state': current_state, 'action': action}"
-
-new = "\t\t# Handle GLM <tool_call> XML format\n\t\tif '<tool_call>' in content:\n\t\t\t# Try full JSON first\n\t\t\tm = re.search(r'\\{[\\s\\S]+?\"current_state\"[\\s\\S]+?\"action\"[\\s\\S]+?\\}', content)\n\t\t\tif m:\n\t\t\t\ttry: return json.loads(m.group(0))\n\t\t\t\texcept: pass\n\t\t\t# Extract parts separately\n\t\t\tcs, ac = {}, []\n\t\t\tcm = re.search(r'\"evaluation_previous_goal\".*?\"next_goal\"\\s*:\\s*\"[^\"]+\"', content, re.DOTALL)\n\t\t\tif cm:\n\t\t\t\ttry: cs = json.loads('{' + cm.group(0) + '}')\n\t\t\t\texcept: pass\n\t\t\tam = re.search(r'\"action\"\\s*[\":]+\\s*(\\[[^\\]]*\\])', content, re.DOTALL)\n\t\t\tif am:\n\t\t\t\ttry: ac = json.loads(am.group(1))\n\t\t\t\texcept: pass\n\t\t\tif cs:\n\t\t\t\treturn {'current_state': cs, 'action': ac}\n\t\t\traise ValueError('Could not parse GLM tool_call')"
-
-if old in content:
-    content = content.replace(old, new)
+target = 'def extract_json_from_model_output(content: str) -> dict:'
+idx = content.find(target)
+if idx != -1:
+    insert_pos = content.find('\n', content.find('\n', idx) + 1) + 1
+    content = content[:insert_pos] + glm_block + content[insert_pos:]
     with open(filepath, 'w') as f:
         f.write(content)
     print("SUCCESS: GLM parser injected")
 else:
-    # Fresh install - insert before existing try block
-    insert_after = 'def extract_json_from_model_output(content: str) -> dict:'
-    glm_block = '\n\t\t# Handle GLM <tool_call> XML format\n\t\tif \'<tool_call>\' in content:\n\t\t\tm = re.search(r\'\\{[\\s\\S]+?"current_state"[\\s\\S]+?"action"[\\s\\S]+?\\}\', content)\n\t\t\tif m:\n\t\t\t\ttry: return json.loads(m.group(0))\n\t\t\t\texcept: pass\n\t\t\tcs, ac = {}, []\n\t\t\tcm = re.search(r\'"evaluation_previous_goal".*?"next_goal"\\s*:\\s*"[^"]+"\', content, re.DOTALL)\n\t\t\tif cm:\n\t\t\t\ttry: cs = json.loads(\'{\' + cm.group(0) + \'}\')\n\t\t\t\texcept: pass\n\t\t\tam = re.search(r\'"action"\\s*[":]+\\s*(\\[[^\\]]*\\])\', content, re.DOTALL)\n\t\t\tif am:\n\t\t\t\ttry: ac = json.loads(am.group(1))\n\t\t\t\texcept: pass\n\t\t\tif cs:\n\t\t\t\treturn {\'current_state\': cs, \'action\': ac}\n\t\t\traise ValueError(\'Could not parse GLM tool_call\')\n'
-    print("NOTE: Could not find existing block. Check utils.py manually.")
-EOF
+    print("ERROR: could not find target function")
+PATCH
 ```
 
 ### 4. Set up Chrome with persistent profile
 
-Login to your VPS desktop (VNC) and open Chromium manually with a profile directory:
+Login to your VPS desktop (VNC) and open Chromium manually:
 
 ```bash
-# From SSH terminal, opens Chromium on VNC display :1
 DISPLAY=:1 ~/.cache/ms-playwright/chromium-1208/chrome-linux/chrome \
   --no-sandbox \
   --user-data-dir=/home/ubuntu/chrome-profile &
 ```
 
-Log in to Threads (or any site you need) manually in the browser window on VNC. Close the browser when done.
+Log in to Threads (or any site you need) in the browser window on VNC. Close the browser when done.
 
 ### 5. Run Chrome as a persistent background service
 
@@ -146,78 +160,10 @@ sudo systemctl start chrome-cdp
 curl -s http://localhost:9222/json/version | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK:', d['Browser'])"
 ```
 
-### 6. Create the runner script
-
-Save this as `/home/ubuntu/browser_agent_runner.py`:
-
-```python
-#!/usr/bin/env python3
-"""
-browser-use-glm runner
-Connects browser-use to GLM-4.6 via Z.AI API with patches for:
-- image_url filtering (GLM does not support vision)
-- XML tool_call response parsing (GLM returns XML, not JSON)
-- Persistent Chrome session via CDP
-"""
-import asyncio, sys, json, subprocess, time, os
-
-# Patch 1: Strip image_url from messages before sending to GLM
-import openai._base_client as obc
-_orig_build = obc.BaseClient._build_request
-
-def _patched_build(self, options, *args, **kwargs):
-    if isinstance(options.json_data, dict) and 'messages' in options.json_data:
-        new_messages = []
-        for m in options.json_data['messages']:
-            if isinstance(m.get('content'), list):
-                text_parts = [p for p in m['content'] if p.get('type') == 'text']
-                m = dict(m)
-                m['content'] = text_parts[0]['text'] if text_parts else ''
-            new_messages.append(m)
-        options.json_data = dict(options.json_data)
-        options.json_data['messages'] = new_messages
-    return _orig_build(self, options, *args, **kwargs)
-
-obc.BaseClient._build_request = _patched_build
-
-from browser_use import Agent, Browser, BrowserConfig
-from langchain_openai import ChatOpenAI
-
-CDP_PORT = 9222
-
-async def main(task: str):
-    llm = ChatOpenAI(
-        base_url='https://api.z.ai/api/coding/paas/v4/',
-        api_key=os.environ.get('ZAI_API_KEY', 'YOUR_API_KEY_HERE'),
-        model='glm-4.6'
-    )
-    browser = Browser(config=BrowserConfig(
-        cdp_url=f'http://localhost:{CDP_PORT}',
-        extra_chromium_args=['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
-    ))
-    agent = Agent(
-        task=task,
-        llm=llm,
-        browser=browser,
-        tool_calling_method='raw'
-    )
-    result = await agent.run()
-    final = result.final_result() if hasattr(result, 'final_result') else str(result)
-    print(json.dumps({"success": True, "result": final}))
-
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print(json.dumps({"success": False, "error": "No task provided"}))
-        sys.exit(1)
-    task = ' '.join(sys.argv[1:])
-    asyncio.run(main(task))
-```
-
-Set your API key:
+### 6. Set your API key
 
 ```bash
 export ZAI_API_KEY="your_api_key_here"
-# Or hardcode it in the script
 ```
 
 ### 7. Test it
@@ -228,15 +174,16 @@ python /home/ubuntu/browser_agent_runner.py "Open https://example.com and get th
 ```
 
 Expected output:
+
 ```json
 {"success": true, "result": "Successfully opened example.com. Page title: 'Example Domain'"}
 ```
 
 ---
 
-## Post to Threads
+## Posting to Threads
 
-Since you logged in during step 4, the session is saved. Just run:
+### Single post
 
 ```bash
 source ~/browser-agent/bin/activate
@@ -244,19 +191,38 @@ python /home/ubuntu/browser_agent_runner.py \
   "Open https://www.threads.net and create a new post with text: Hello from AI agent! 🤖"
 ```
 
+### Thread chains (2+ posts)
+
+For multi-post threads, use `post_thread.py` instead of the AI agent. This script uses Playwright CDP directly — deterministic and reliable for any number of posts.
+
+```bash
+source ~/browser-agent/bin/activate
+THREADS_USERNAME=yourusername python /home/ubuntu/post_thread.py \
+  "First post 🧵" \
+  "Second post 🔧" \
+  "Third post ✅"
+```
+
+Set your username permanently:
+
+```bash
+export THREADS_USERNAME="yourusername"
+```
+
+> **Why a separate script?** The AI agent (`browser_agent_runner.py`) is unreliable for multi-post threads — it tends to merge posts or fail at post 3+ due to GLM's inconsistent tool call parsing. `post_thread.py` bypasses the AI entirely and controls the Threads composer directly via Playwright.
+
 ---
 
 ## OpenClaw Skill (optional)
 
 If you use [OpenClaw](https://openclaw.dev), you can control the browser agent via Telegram.
 
-Create the skill directory and files:
-
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/browser
 ```
 
 **`~/.openclaw/workspace/skills/browser/_meta.json`**
+
 ```json
 {
   "slug": "browser",
@@ -266,45 +232,71 @@ mkdir -p ~/.openclaw/workspace/skills/browser
 ```
 
 **`~/.openclaw/workspace/skills/browser/SKILL.md`**
-```markdown
+
+Create this file with the following content:
+
+```
 ---
 name: browser
-description: "Control a real Chromium browser to automate web tasks. Use for posting to Threads, browsing websites, filling forms, or extracting web content. Do NOT use xdotool, xte, wmctrl, or firefox. Threads is already logged in."
+description: "Control a real Chromium browser. For posting thread chains to Threads (2+ posts), use post_thread.py. For single posts or general browsing, use browser_agent_runner.py."
 ---
 
 # Browser Automation Skill
 
-## Command
+## Post Thread Chain (2+ posts)
 
-\`\`\`bash
-source /home/ubuntu/browser-agent/bin/activate && python /home/ubuntu/browser_agent_runner.py "TASK HERE"
-\`\`\`
+THREADS_USERNAME=yourusername source /home/ubuntu/browser-agent/bin/activate \
+  && python /home/ubuntu/post_thread.py "post 1" "post 2" "post 3"
 
-## Examples
+## Single Post / General Browsing
 
-Post to Threads:
-\`\`\`bash
-source /home/ubuntu/browser-agent/bin/activate && python /home/ubuntu/browser_agent_runner.py "Open https://www.threads.net and create a new post with text: YOUR TEXT HERE"
-\`\`\`
-
-Browse and extract:
-\`\`\`bash
-source /home/ubuntu/browser-agent/bin/activate && python /home/ubuntu/browser_agent_runner.py "Open https://techcrunch.com/category/artificial-intelligence/ and get the 5 latest headlines"
-\`\`\`
+source /home/ubuntu/browser-agent/bin/activate \
+  && python /home/ubuntu/browser_agent_runner.py "TASK HERE"
 
 ## Notes
-- Chrome profile with Threads login: /home/ubuntu/chrome-profile
 - Chrome CDP service: sudo systemctl status chrome-cdp
 - To restart Chrome: sudo systemctl restart chrome-cdp
 ```
 
-Then restart OpenClaw:
+Restart OpenClaw after updating the skill:
+
 ```bash
 systemctl --user restart openclaw-gateway.service
 ```
 
 Now you can tell OpenClaw via Telegram:
-> _"Post to Threads: Hello from OpenClaw! 🦞"_
+
+> *"Post thread to Threads: post 1: 'Hello 🧵' post 2: 'Second post 🔧' post 3: 'Done ✅'"*
+
+---
+
+## Architecture
+
+```
+Telegram
+  ↓ message
+OpenClaw (glm-4.6)
+  ↓ reads browser skill, runs command
+  ├── post_thread.py          (thread chains — Playwright CDP, deterministic)
+  └── browser_agent_runner.py (single tasks — AI agent via GLM-4.6)
+        ↓
+Chrome :9222 (headless, with saved logins)
+        ↓
+Any website (Threads, etc) ✅
+```
+
+---
+
+## Key files
+
+| File | Purpose |
+|------|---------|
+| `~/browser-agent/` | Python venv with browser-use |
+| `~/browser_agent_runner.py` | AI agent runner for general tasks |
+| `~/post_thread.py` | Deterministic thread chain poster (2+ posts) |
+| `~/chrome-profile/` | Chrome profile with saved logins |
+| `/etc/systemd/system/chrome-cdp.service` | Chrome background service |
+| `~/.openclaw/workspace/skills/browser/` | OpenClaw skill |
 
 ---
 
@@ -318,6 +310,7 @@ The XML parser patch is not applied. Re-run the utils.py patch script.
 
 **Chrome CDP connection refused**
 Chrome service is not running. Run:
+
 ```bash
 sudo systemctl restart chrome-cdp
 curl -s http://localhost:9222/json/version
@@ -325,6 +318,7 @@ curl -s http://localhost:9222/json/version
 
 **`SingletonLock` error when starting Chrome**
 Another Chrome instance is using the profile. Run:
+
 ```bash
 rm -f /home/ubuntu/chrome-profile/Singleton*
 sudo systemctl restart chrome-cdp
@@ -334,38 +328,7 @@ sudo systemctl restart chrome-cdp
 This is expected — those tools are unreliable on ARM64. Use this browser-use approach instead.
 
 **OpenClaw not using the browser skill**
-Be explicit in your Telegram message, e.g.:
-> _"Use the browser skill to post to Threads: [your text]"_
-
-Or update the skill's `description` field to be more specific.
-
----
-
-## Architecture
-
-```
-Telegram
-  ↓ message
-OpenClaw (glm-4.6)
-  ↓ reads browser skill, runs command
-browser_agent_runner.py
-  ↓ connects via CDP
-Chrome :9222 (headless, with saved logins)
-  ↓ controls browser
-Any website (Threads, etc) ✅
-```
-
----
-
-## Key files
-
-| File | Purpose |
-|------|---------|
-| `~/browser-agent/` | Python venv with browser-use |
-| `~/browser_agent_runner.py` | Main runner script |
-| `~/chrome-profile/` | Chrome profile with saved logins |
-| `/etc/systemd/system/chrome-cdp.service` | Chrome background service |
-| `~/.openclaw/workspace/skills/browser/` | OpenClaw skill |
+Be explicit in your Telegram message, or update the skill `description` to be more specific.
 
 ---
 
