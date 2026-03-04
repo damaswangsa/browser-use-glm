@@ -41,7 +41,7 @@ async def main(task: str):
     try:
         llm = ChatOpenAI(
             base_url='https://api.z.ai/api/coding/paas/v4/',
-            api_key='a23ce80df82e4d76ac679c9742d0e5f9.0j6TSHbYWvw1nyC7',
+            api_key=os.environ.get('ZAI_API_KEY', 'YOUR_API_KEY_HERE'),
             model='glm-4.6'
         )
         browser = Browser(config=BrowserConfig(
